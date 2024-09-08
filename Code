@@ -1,0 +1,304 @@
+## Parcial # 2 ######
+## Librerias
+library(xlsx)
+library(tools)
+library(gtools)
+library(stringr)
+library(readr)
+library(haven)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(WriteXLS)
+library(spatialEco)
+library(spdep)
+library(gstat)
+library(raster)
+library(sf)
+library(sp)
+library(readxl)
+library(pacman)
+library(spdep)
+library(sfheaders)
+library(sf)
+library(dplyr)
+p_load(sp,readxl, tidyverse, raster, foreign) 
+library(spatialreg)
+library(ggplot2)
+library(raster)
+###################################
+library(maptools)
+library(spdep)
+library(RColorBrewer)
+library(Hmisc)##Falta instalar
+library(sp)
+library(leaflet)
+################################################################################
+#Carga de los datos
+################################################################################
+divipola <- st_read("C:/Users/andre/OneDrive/Escritorio/Andrés 2024/2024-1/Espacial/Parcial 2/parcial 2 espacial/parcial 2 espacial/BASE_CNPV_MPIOS_2018.shp")
+municipiosantioquia <- read_excel("C:/Users/andre/OneDrive/Escritorio/Andrés 2024/2024-1/Espacial/Parcial 2/parcial 2 espacial/parcial 2 espacial/municipiosantioquia.xlsx")
+
+dfColCV <- merge(x = divipola, y = municipiosantioquia, by.x = "MPIO_CCNCT", by.y = "Código Municipio", 
+                 all.x = TRUE)%>%filter(DPTO_CCDGO == '05')
+
+coordenadas_departamentos <- coordinates(as((dfColCV), 'Spatial'))
+
+################################################################################
+#Análisis descriptivo
+################################################################################
+
+#Resumen variables 
+summary(municipiosantioquia$`Actividades primarias *`)
+summary(municipiosantioquia$`Actividades secundarias **`)
+summary(municipiosantioquia$`Actividades terciarias ***`)
+
+##Boxplot
+datos_largo <- municipiosantioquia[,c(-1,-2,-3,-4,-8,-9)] %>%
+  gather(key = "variable", value = "valor")
+
+ggplot(datos_largo, aes(x = variable, y = valor, fill = variable)) +
+  geom_boxplot() +
+  labs(title = "Boxplot por actividad económica",
+       x = "Actividad económica",
+       y = "Valor agregado en miles de millones de pesos") +
+  coord_flip()+
+  scale_fill_hue(labels = c("Actividad primaria", "Actividad secundaria", "Actividad terciaria"))+
+  theme_minimal()
+
+
+## Comparación Actividad 1 Vs Actividad 3 y Actividad 2 Vs Actividad 3
+plot(municipiosantioquia$`Actividades primarias *`, municipiosantioquia$`Actividades terciarias ***`, pch=16, xlab="Valor agregado Actividades primariarias",
+     ylab="Valor agregado Actividades terciarias",main="Actividades primarias vs Actividades terciarias")
+plot(municipiosantioquia$`Actividades secundarias **`, municipiosantioquia$`Actividades terciarias ***`, pch=16,xlab="Valor agregado Actividades secundarias",
+     ylab="Valor agregado Actividades terciarias",main="Actividades secundarias vs Actividades terciarias")
+
+## Modelo lineal simple 
+reg_A1_vs_A3=lm(municipiosantioquia$`Actividades terciarias ***`~municipiosantioquia$`Actividades primarias *`)
+reg_A1_vs_A3
+summary(reg_A1_vs_A3)
+abline(reg_A1_vs_A3, col = 4, lwd = 3)
+
+reg_A2_vs_A3=lm(municipiosantioquia$`Actividades terciarias ***`~municipiosantioquia$`Actividades secundarias **`)
+reg_A2_vs_A3
+summary(reg_A2_vs_A3)
+abline(reg_A2_vs_A3, col = 4, lwd = 3)
+
+reg_A1A2_vs_A3=lm(municipiosantioquia$`Actividades terciarias ***`~municipiosantioquia$`Actividades primarias *`*municipiosantioquia$`Actividades secundarias **`)
+reg_A1A2_vs_A3
+summary(reg_A1A2_vs_A3)
+abline(reg_A1A2_vs_A3, col = 4, lwd = 3) ## (NQ) ¿Como se depuraba el modelo, para dejar unicamente lo significatvo?
+
+## Mapas 
+#Valor agregado Actividades primarias
+ggplot(data = dfColCV,aes(fill =`Actividades primarias *`)) +geom_sf()+
+  geom_sf(color = "black", size = 0.1)+labs(fill = "Valor agregado Actividades primarias \n en miles de millones de pesos")+scale_fill_viridis_c(option = "plasma") 
+
+#Valor agregado Actividades secundarias
+ggplot(data = dfColCV,aes(fill =`Actividades secundarias **`)) +geom_sf()+
+  geom_sf(color = "black", size = 0.1)+labs(fill = "Valor aregado Actividades secundarias \n en miles de millones de pesos")+scale_fill_viridis_c(option = "plasma")
+
+#Valor agregado Actividades terciarias
+ggplot(data = dfColCV,aes(fill =`Actividades terciarias ***`)) +geom_sf()+
+  geom_sf(color = "black", size = 0.1)+labs(fill = "Valor aregado Actividades terciarias \n en miles de millones de pesos")+scale_fill_viridis_c(option = "plasma")
+
+
+
+################################################################################
+# Crear un objeto de datos espaciales
+################################################################################
+
+coordenadas_departamentos <- coordinates(as((dfColCV), 'Spatial'))
+
+nb_to_df <- function(nb, coords) {
+  x <- coords[, 1]
+  y <- coords[, 2]
+  n <- length(nb)
+  
+  cardnb <- card(nb)
+  i <- rep(1:n, cardnb)
+  j <- unlist(nb)
+  
+  if (length(cardnb) == 0) {
+    return(data.frame(x = numeric(0), xend = numeric(0), y = numeric(0), yend = numeric(0)))
+  }
+  
+  return(data.frame(x = x[i], xend = x[j], y = y[i], yend = y[j]))
+}
+
+
+################################################################################
+#CRITERIO DE QUEEN
+################################################################################
+
+queen <- poly2nb(as(dfColCV, 'Spatial'), row.names = dfColCV$MPIO_CCNCT, queen = T)
+queen_lw <- nb2listw(queen, style="W", zero.policy=TRUE)
+
+
+queen_colombia_df <- nb_to_df(queen, coordenadas_departamentos)
+
+# Gráfico para vecinos Queen
+ggplot() +
+  geom_sf(data = dfColCV) +
+  geom_point(data = queen_colombia_df, aes(x = x, y = y), color = "blue") +
+  geom_segment(data = queen_colombia_df,
+               aes(x = x, xend = xend, y = y, yend = yend), color = "blue") +
+  labs(x = "", y = "", title = "Vecinos Queen")
+
+################################################################################
+#SAR
+################################################################################
+
+# Construye el modelo SAR
+#  sar_model <- spautolm(IDNC ~ EstimadoConflicto, data = dfColCV, listw = queen_lw)
+#  summary(sar_model)
+
+sar_model <- spautolm(`Actividades terciarias ***` ~ `Actividades primarias *`*`Actividades secundarias **`, data = dfColCV, listw = queen_lw)
+summary(sar_model)
+
+## Modelo depurado ((NQ) no sé si se debe depurar el modelo o si se deja con todo, hay que comprobar que si se tengan cambios entre el modelo sin depurar y el depurado)
+sar_model2<-spautolm(`Actividades terciarias ***` ~ `Actividades primarias *`*`Actividades secundarias **`-`Actividades primarias *`, data = dfColCV, listw = queen_lw)
+summary(sar_model2)
+
+######## Predicciones de los modelos
+fitted.values(sar_model)
+
+ggplot(data = dfColCV,aes(fill =fitted.values(sar_model))) +geom_sf()+
+  geom_sf(color = "black", size = 0.1)+labs(fill = "Valor aregado Actividades terciarias \n en miles de millones de pesos \n (Valores ajustados)")+scale_fill_viridis_c(option = "plasma")
+
+################################################################################
+#Residuales
+################################################################################
+
+dfColCV$lmwresid <- residuals(sar_model) 
+residuales <- residuals(sar_model)
+summary(residuales)
+
+moran_test_residuales <- moran.test(residuales, queen_lw) 
+
+moran_test_residuales ## Creo que indica un patrón espacial aleatorio. 
+
+ggplot(data = dfColCV,aes(fill =residuales)) +geom_sf()+
+  geom_sf(color = "black", size = 0.1)+labs(fill = "Valor aregado Actividades terciarias \n en miles de millones de pesos \n (Residuales)")+scale_fill_viridis_c(option = "plasma")
+
+plot(residuales, 
+     type = "p",            # Tipo de gráfico (puntos)
+     col = "blue",          # Color de los puntos
+     pch = 19,              # Tipo de puntos sólidos
+     xlab = "Índice de Observaciones", 
+     ylab = "Residuos",
+     main = "Gráfico de Residuos del Modelo SAR")
+
+# Añadir una línea en y=0 para referencia
+abline(h = 0, col = "red", lwd = 2)
+##################################################
+
+dfColCV$lmwresid2 <- residuals(sar_model2) 
+residuales2 <- residuals(sar_model2)
+summary(residuales2)
+
+moran_test_residuales2 <- moran.test(residuales2, queen_lw) 
+
+moran_test_residuales2 ## Creo que indica un patrón espacial aleatorio. 
+
+ggplot(data = dfColCV,aes(fill =residuales2)) +geom_sf()+
+  geom_sf(color = "black", size = 0.1)+labs(fill = "Valor aregado Actividades terciarias \n en miles de millones de pesos \n (Valores ajustados)")+scale_fill_viridis_c(option = "plasma")
+################################################################################
+#Modelo sin Medellín
+################################################################################
+dfColCV2<-dfColCV[-1,]
+
+queen2 <- poly2nb(as(dfColCV2, 'Spatial'), row.names = dfColCV2$MPIO_CCNCT, queen = T)
+queen_lw2 <- nb2listw(queen2, style="W", zero.policy=TRUE)
+
+sar_model_sinMed <- spautolm(`Actividades terciarias ***` ~ `Actividades primarias *`*`Actividades secundarias **`, data = dfColCV2, listw = queen_lw2)
+summary(sar_model_sinMed)
+
+residuales2 <- residuals(sar_model_sinMed)
+moran_test_residuales2 <- moran.test(residuales2, queen_lw2) 
+plot(residuales2, 
+     type = "p",            # Tipo de gráfico (puntos)
+     col = "blue",          # Color de los puntos
+     pch = 19,              # Tipo de puntos sólidos
+     xlab = "Índice de Observaciones", 
+     ylab = "Residuos",
+     main = "Gráfico de Residuos del Modelo SAR (sin Medellín)")
+
+# Añadir una línea en y=0 para referencia
+abline(h = 0, col = "red", lwd = 2)
+
+
+########################
+#MDOELO CAR
+
+divipola <- st_read("C:/Users/camil/Downloads/parcial 2 espacial/BASE_CNPV_MPIOS_2018.shp")
+municipiosantioquia <- read_excel("C:/Users/camil/Downloads/parcial 2 espacial/municipiosantioquia.xlsx")
+dfColCV <- merge(x = divipola, y = municipiosantioquia, by.x = "MPIO_CCNCT", by.y = "Código Municipio", 
+                 all.x = TRUE)%>%filter(DPTO_CCDGO == '05')
+coordenadas_departamentos <- coordinates(as((dfColCV), 'Spatial'))
+---
+  nb_to_df <- function(nb, coords) {
+    x <- coords[, 1]
+    y <- coords[, 2]
+    n <- length(nb)
+    
+    cardnb <- card(nb)
+    i <- rep(1:n, cardnb)
+    j <- unlist(nb)
+    
+    if (length(cardnb) == 0) {
+      return(data.frame(x = numeric(0), xend = numeric(0), y = numeric(0), yend = numeric(0)))
+    }
+    
+    return(data.frame(x = x[i], xend = x[j], y = y[i], yend = y[j]))
+  }
+
+
+################################################################################
+#CRITERIO DE QUEEN
+################################################################################
+
+queen <- poly2nb(as(dfColCV, 'Spatial'), row.names = dfColCV$MPIO_CCNCT, queen = T)
+queen_lw <- nb2listw(queen, style="W", zero.policy=TRUE)
+
+queen_colombia_df <- nb_to_df(queen, coordenadas_departamentos)
+
+################################################################################
+#CAR
+################################################################################
+# Modelos CAR
+car_model <- spautolm(`Actividades terciarias ***` ~ `Actividades primarias *`*
+                        `Actividades secundarias **` , data = dfColCV,family = "CAR", listw = queen_lw)
+summary(car_model)
+
+
+car_model2 <- spautolm(`Actividades terciarias ***` ~ `Actividades primarias *`+
+                         `Actividades secundarias **` , data = dfColCV,family = "CAR", listw = queen_lw)
+summary(car_model2)
+
+
+########### gráfica de residuales#######
+dfColCV$lmwresid <- residuals(car_model) 
+residuales <- residuals(car_model)
+ggplot(data = dfColCV,aes(fill =residuales)) +geom_sf()+
+  geom_sf(color = "black", size = 0.1)+labs(fill = "Residuales del modelo CAR")+scale_fill_viridis_c(option = "plasma")
+###########################
+#Modelo sin Medellin
+#######################
+dfColCVsinmedellin <- merge(x = divipola, y = municipiosantioquia, by.x = "MPIO_CCNCT", by.y = "Código Municipio", 
+                            all.x = TRUE)%>%filter(DPTO_CCDGO == '05')%>%filter(MPIO_CCNCT != '05001')
+
+coordenadas_departamentos <- coordinates(as((dfColCVsinmedellin), 'Spatial'))
+
+queen <- poly2nb(as(dfColCVsinmedellin, 'Spatial'), row.names = dfColCVsinmedellin$MPIO_CCNCT, queen = T)
+queen_lw <- nb2listw(queen, style="W", zero.policy=TRUE)
+queen_colombia_df <- nb_to_df(queen, coordenadas_departamentos)
+car_model3 <- spautolm(`Actividades terciarias ***` ~ `Actividades primarias *`*
+                         `Actividades secundarias **` , data = dfColCVsinmedellin,family = "CAR", listw = queen_lw)
+summary(car_model3)
+
+dfColCVsinmedellin$lmwresid <- residuals(car_model3) 
+residuales <- residuals(car_model3)
+ggplot(data = dfColCVsinmedellin,aes(fill =residuales)) +geom_sf()+
+  geom_sf(color = "black", size = 0.1)+labs(fill = "Residuales del modelo CAR sin Medellín")+scale_fill_viridis_c(option = "plasma")
+
